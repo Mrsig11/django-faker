@@ -7,7 +7,7 @@ class Product(models.Model):
     stock = models.IntegerField()
     reference_uuid = models.UUIDField(editable=False)
     
-    faker_seed = {'len': 100}
+    faker_seed = {'len': 1350}
 
 class Order(models.Model):
     customer = models.ForeignKey('accounts.User', on_delete=models.CASCADE)
@@ -16,4 +16,4 @@ class Order(models.Model):
     ip_address = models.GenericIPAddressField()
     order_date = models.DateTimeField()
     
-    faker_seed = {'len': 300}
+    faker_seed = {'len': 26579}

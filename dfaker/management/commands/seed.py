@@ -1,9 +1,13 @@
 import time
-from typing import List, Dict, Set
+import random
+from typing import List, Dict, Set, Any
 from django.core.management.base import BaseCommand
 from django.apps import apps
 from django.db import transaction, models
-from ._field import get_generator, FieldGenerator
+from ._field import get_generator, FieldGenerator, fake
+
+
+BATCH_SIZE = 2000
 
 class Command(BaseCommand):
     help = 'Génère des fausses données optimisées'
@@ -62,6 +66,8 @@ class Command(BaseCommand):
             return
 
         total_count = faker_config.get('len', 0)
+        custom_fields: Dict[str, Any] = faker_config.get('fields', {})
+        
         if total_count <= 0:
             return
 
@@ -69,49 +75,62 @@ class Command(BaseCommand):
         self.stdout.write(f'Traitement de {model_name} ({total_count} objets)...')
 
         # 1. Préparation des générateurs (Instanciés UNE SEULE FOIS par modèle)
+        generators: Dict[str, FieldGenerator] = self._get_generators(model)
+        
+
+        # 2. Génération par lots (Batching) pour économiser la RAM
+        for start in range(0, total_count, BATCH_SIZE):
+            batch_size = min(BATCH_SIZE, total_count - start)
+            objs_buffer = [
+                model(**self._get_data(model, generators, custom_fields))
+                for _ in range(batch_size)
+            ]
+            self._bulk_write(model, objs_buffer)
+        
+        self.stdout.write(self.style.SUCCESS(f' -> Terminé pour {model_name}'))
+
+    def _get_data(self, model: models.Model, generators: Dict[str, FieldGenerator], custom_fields: Dict[str, Any]):
+        data = {}        
+        for field_name, generator in generators.items():
+            clean_name = field_name.replace('_id', '')
+            if clean_name in custom_fields: continue
+            try:
+                data[field_name] = generator.generate()
+            except Exception:
+                pass
+
+        for field_name, resolver in custom_fields.items():
+            target_key = field_name
+            if hasattr(model, f"{field_name}_id"):
+                target_key = f"{field_name}_id"
+
+            if callable(resolver):
+                data[target_key] = resolver(fake)
+            elif isinstance(resolver, list):
+                data[target_key] = random.choice(resolver)
+            else:
+                data[target_key] = resolver
+            
+        return data
+    
+    def _get_generators(self, model: models.Model):
         generators: Dict[str, FieldGenerator] = {}
+        
         for field in model._meta.get_fields():
             if isinstance(field, models.Field) and not field.primary_key and not isinstance(field, models.ManyToManyField):
                 gen = get_generator(field)
                 if gen:
-                    gen.prepare() # Charge le cache (ex: IDs des ForeignKeys)
-               
-                    # OPTIMISATION ICI :
-                    # Si c'est une ForeignKey, on cible le champ '_id' en base de données
-                    # pour pouvoir passer directement l'entier récupéré.
+                    gen.prepare()
                     field_key = field.name
                     if isinstance(field, (models.ForeignKey, models.OneToOneField)):
                         field_key = f"{field.name}_id"
                     
                     generators[field_key] = gen
 
-        # 2. Génération par lots (Batching) pour économiser la RAM
-        BATCH_SIZE = 2000
-        objs_buffer = []
-
-        for _ in range(total_count):
-            data = {}
-            for field_name, generator in generators.items():
-                try:
-                    data[field_name] = generator.generate()
-                except Exception:
-                    pass # Fallback ou log
-            
-            objs_buffer.append(model(**data))
-
-            # Si le buffer est plein, on écrit
-            if len(objs_buffer) >= BATCH_SIZE:
-                self._bulk_write(model, objs_buffer)
-                objs_buffer = []
-
-        # Écriture des restants
-        if objs_buffer:
-            self._bulk_write(model, objs_buffer)
-        
-        self.stdout.write(self.style.SUCCESS(f' -> Terminé pour {model_name}'))
-
+        return generators
+    
     def _bulk_write(self, model: models.Model, objects):
         try:
-            model.objects.bulk_create(objects, batch_size=2000)
+            model.objects.bulk_create(objects, batch_size=BATCH_SIZE)
         except Exception as e:
             self.stderr.write(self.style.ERROR(f"Erreur sur {model.__name__}: {e}"))

@@ -7,8 +7,13 @@ class User(models.Model):
     is_active = models.BooleanField(default=True)
     date_joined = models.DateTimeField(auto_now_add=True)
     
-    # Configuration pour ton script
-    faker_seed = {'len': 50}
+    faker_seed = {
+        'len': 100,
+        'fields': {
+            'username': lambda f: f"USER_{f.unique.random_int(min=1000, max=9999)}",
+            'email': lambda f: f"{f.first_name()}.{f.last_name()}@entreprise.com".lower()
+        }
+    }
 
     def __str__(self):
         return self.username
@@ -19,4 +24,4 @@ class Profile(models.Model):
     birth_date = models.DateField(null=True)
     website = models.URLField(blank=True)
     
-    faker_seed = {'len': 50}
+    faker_seed = {'len': 100}
